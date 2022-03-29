@@ -13,7 +13,6 @@ import org.matsim.api.core.v01.network.NetworkFactory;
 import org.matsim.api.core.v01.network.Node;
 import org.matsim.core.config.ConfigUtils;
 import org.matsim.core.network.NetworkUtils;
-import org.matsim.core.network.algorithms.NetworkCleaner;
 import org.matsim.core.network.io.NetworkWriter;
 import org.matsim.core.scenario.ScenarioUtils;
 import org.matsim.core.utils.geometry.CoordUtils;
@@ -21,14 +20,12 @@ import org.matsim.core.utils.geometry.CoordinateTransformation;
 import org.matsim.core.utils.geometry.transformations.TransformationFactory;
 
 import java.io.File;
-import java.io.FileReader;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Iterator;
-import java.util.Map;
 
 public class LinkTablesReader {
     private static final Logger log = Logger.getLogger(LinkTablesReader.class);
@@ -36,8 +33,8 @@ public class LinkTablesReader {
     private CoordinateTransformation ct;
     private Network network;
     private NetworkFactory networkFactory;
+    Integer linkCounter = 1;
 
-    private final File outDir;
     private final File nodesFile;
     private final File linksFile;
 
@@ -46,16 +43,14 @@ public class LinkTablesReader {
      * @param scenario A MATSim scenario
      * @param nodesFile A CSV file with node IDS.
      * @param linksFile A CSV file with link attributes
-     * @param outDir The path to the output MATSim network *directory*. File is `<outDir>/highway_network.xml.gz`
      */
-    public LinkTablesReader (Scenario scenario, File nodesFile, File linksFile, File outDir) {
+    public LinkTablesReader (Scenario scenario, File nodesFile, File linksFile) {
         this.scenario = scenario;
         this.network = this.scenario.getNetwork();
         this.networkFactory = network.getFactory();
         this.ct = TransformationFactory.getCoordinateTransformation(
                 TransformationFactory.WGS84,
                 this.scenario.getConfig().global().getCoordinateSystem());
-        this.outDir = outDir;
         this.nodesFile = nodesFile;
         this.linksFile = linksFile;
     }
@@ -134,15 +129,20 @@ public class LinkTablesReader {
                 Id<Node> toNodeId   = Id.createNodeId(csvRecord.get("b"));
                 Node fromNode = network.getNodes().get(fromNodeId);
                 Node toNode   = network.getNodes().get(toNodeId);
-                Id<Link> linkId = Id.createLinkId(csvRecord.get("link_id"));
-                Link l = networkFactory.createLink(linkId, fromNode, toNode);
+                Id<Link> linkId = Id.createLinkId(linkCounter);
+                Link l =  networkFactory.createLink(linkId, fromNode, toNode);
 
                 // get link attributes from csv
                 Double speed  = Double.valueOf(csvRecord.get("speed"));
                 Double lengthMiles = Double.valueOf(csvRecord.get("length"));
                 Double capacity    = Double.valueOf(csvRecord.get("capacity"));
                 Integer lanes      = Integer.valueOf(csvRecord.get("lanes"));
-                Integer oneWay     = Integer.valueOf(csvRecord.get("oneway"));
+                String type = csvRecord.get("type");
+                Integer oneWay = 0;
+                try {
+                    oneWay = Integer.valueOf(csvRecord.get("oneway"));
+                } catch (IllegalArgumentException e){
+                }
 
                 Double length = lengthMiles * 1609.34; // convert miles to meters
                 Double freeSpeed = speed * 0.44704; // convert meters per minute to meters per second
@@ -152,18 +152,23 @@ public class LinkTablesReader {
                 l.setFreespeed(freeSpeed);
                 l.setNumberOfLanes(lanes);
                 l.setCapacity(capacity);
+                l.getAttributes().putAttribute("type", type);
+
                 network.addLink(l);
+                linkCounter++;
 
                 // create reverse direction link if it exists
                 if(oneWay != 1) {
-                    Id<Link> rLinkId = Id.createLinkId(linkId.toString() + "r");
+                    Id<Link> rLinkId = Id.createLinkId(linkCounter);
                     Link rl = networkFactory.createLink(rLinkId, toNode, fromNode);
 
                     rl.setLength(length);
                     rl.setFreespeed(freeSpeed);
                     rl.setNumberOfLanes(lanes);
                     rl.setCapacity(capacity);
+                    rl.getAttributes().putAttribute("type", type);
                     network.addLink(rl);
+                    linkCounter++;
                 }
 
             }
@@ -227,11 +232,11 @@ public class LinkTablesReader {
 
 
 
-    private void writeNetwork(){
-        log.info("Writing network to " + outDir);
+    private void writeNetwork(String outFile){
+        log.info("Writing network to " + outFile);
         log.info("--- Links: " + network.getLinks().values().size());
         log.info("--- Nodes: " + network.getNodes().values().size());
-        new NetworkWriter(network).write(outDir.toString() + "/highway_network.xml.gz");
+        new NetworkWriter(network).write(outFile);
     }
 
 
@@ -239,16 +244,16 @@ public class LinkTablesReader {
     public static void main(String[] args) {
         File nodesFile = new File(args[0]);
         File linksFile = new File(args[1]);
-        File outDir = new File(args[2]);
+        String outFile = args[2];
         String crs = args[3];
 
         Scenario scenario = ScenarioUtils.createScenario(ConfigUtils.createConfig());
         scenario.getConfig().global().setCoordinateSystem(crs);
-        LinkTablesReader reader = new LinkTablesReader(scenario, nodesFile, linksFile, outDir);
+        LinkTablesReader reader = new LinkTablesReader(scenario, nodesFile, linksFile);
 
         try {
             reader.makeNetwork();
-            reader.writeNetwork();
+            reader.writeNetwork(outFile);
         } catch (IOException e) {
             e.printStackTrace();
         }
